@@ -1,0 +1,16 @@
+# 忽略虛擬環境
+venv/
+eric/
+
+
+# Python 編譯暫存檔
+__pycache__/
+*.py[cod]
+
+# 編輯器/IDE 設定檔
+.vscode/
+.idea/
+
+# 環境變數與憑證
+.env
+*.env
