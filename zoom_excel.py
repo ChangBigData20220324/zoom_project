@@ -1,20 +1,21 @@
 from openpyxl import Workbook, load_workbook
 import os
+import tkinter as tk
+from tkinter import messagebox
+from datetime import datetime
 
 FILENAME = "meeting_schedule.xlsx"
 
-# 從 TimeSlots 工作表載入時間對照表
-def load_time_slots(filename=FILENAME):
-    wb = load_workbook(filename)
-    ws = wb["TimeSlots"]
-    time_slots = {}
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        slot_id, time_range, disabled = row
-        if str(disabled).strip().upper() != "TRUE":
-            time_slots[int(slot_id)] = time_range
-    return time_slots
+# 全域變數儲存跨畫面資料
+app_state = {
+    "selected_date": None,
+    "selected_slots": [],
+    "selected_room": None,
+    "user_id": "",
+    "purpose": ""
+}
 
-# 初始化 Excel 檔案並建立必要的工作表
+# 初始化 Excel 檔案
 def init_excel_file(filename=FILENAME):
     if not os.path.exists(filename):
         wb = Workbook()
@@ -41,84 +42,21 @@ def init_excel_file(filename=FILENAME):
             ws_slots.append([i, time_range, "FALSE"])
 
         wb.save(filename)
-    else:
-        wb = load_workbook(filename)
-        created = False
 
-        if "Schedule" not in wb.sheetnames:
-            ws = wb.create_sheet("Schedule")
-            ws.append(["流水號", "預約日期", "時段ID", "會議ID", "預約人ID", "使用目的", "取消狀態"])
-            created = True
-
-        if "MeetingRooms" not in wb.sheetnames:
-            ws = wb.create_sheet("MeetingRooms")
-            ws.append(["會議ID", "名稱", "帳號", "密碼", "連結", "用途", "停用狀態"])
-            ws.append(["A201", "第一會議室", "acc1", "pwd1", "https://meet.link/A201", "一般用途", "FALSE"])
-            ws.append(["B102", "第二會議室", "acc2", "pwd2", "https://meet.link/B102", "公司內部使用", "FALSE"])
-            ws.append(["C303", "第三會議室", "acc3", "pwd3", "https://meet.link/C303", "研發專用", "TRUE"])
-            created = True
-
-        if "MeetingUsers" not in wb.sheetnames:
-            ws = wb.create_sheet("MeetingUsers")
-            ws.append(["預約人ID", "工號", "聯絡信箱", "分機"])
-            created = True
-
-        if "TimeSlots" not in wb.sheetnames:
-            ws = wb.create_sheet("TimeSlots")
-            ws.append(["時間ID", "時間區段", "停用狀態"])
-            for i in range(1, 9):
-                start = 9 + i - 1
-                end = start + 1
-                time_range = f"{start:02d}:00–{end:02d}:00"
-                ws.append([i, time_range, "FALSE"])
-            created = True
-
-        if created:
-            wb.save(filename)
-
-# 顯示會議室預約狀況
-def check_availability(target_date, filename=FILENAME):
-    time_slots = load_time_slots(filename)
+# 載入可用時段
+def load_time_slots(filename=FILENAME):
     wb = load_workbook(filename)
-    ws = wb["Schedule"]
-    schedule = {i: [] for i in time_slots}
-
+    ws = wb["TimeSlots"]
+    time_slots = {}
     for row in ws.iter_rows(min_row=2, values_only=True):
-        record_date, slot_ids_str, meeting_id, canceled = row[1], row[2], row[3], row[6]
-        if record_date == target_date and not canceled:
-            for sid in map(int, slot_ids_str.split(',')):
-                if sid in schedule:
-                    schedule[sid].append(meeting_id)
+        slot_id, time_range, disabled = row
+        if str(disabled).strip().upper() != "TRUE":
+            time_slots[int(slot_id)] = time_range
+    return time_slots
 
-    print(f"\n【{target_date} 會議室預約狀況】")
-    for slot_id, time_str in time_slots.items():
-        rooms = schedule.get(slot_id, [])
-        if rooms:
-            print(f"時段 {slot_id}（{time_str}）：已預約 - {', '.join(map(str, rooms))}")
-        else:
-            print(f"時段 {slot_id}（{time_str}）：可預約")
-
-# 使用者輸入合法時段
-def input_slot_ids(filename=FILENAME):
-    time_slots = load_time_slots(filename)
-    valid_ids = set(time_slots.keys())
-    while True:
-        user_input = input("請輸入欲預約的時段 ID（可輸入多個，以逗號分隔）：").strip()
-        try:
-            slot_ids = list(map(int, user_input.split(',')))
-            if not slot_ids:
-                print("不可為空白，請重新輸入。")
-                continue
-            if not all(slot in valid_ids for slot in slot_ids):
-                print(f"輸入的時段中有無效或已停用的 ID，目前可用時段為：{sorted(valid_ids)}")
-                continue
-            return slot_ids
-        except ValueError:
-            print("格式錯誤，請輸入整數，例如：2 或 2,3,4")
-
-# 查詢可用會議室
-def get_available_meeting_rooms(date, slot_ids, filename=FILENAME):
-    wb = load_workbook(filename)
+# 查詢當天某些時段有哪些會議室可用
+def get_available_rooms(date, slot_ids):
+    wb = load_workbook(FILENAME)
     ws_schedule = wb["Schedule"]
     ws_rooms = wb["MeetingRooms"]
 
@@ -132,76 +70,184 @@ def get_available_meeting_rooms(date, slot_ids, filename=FILENAME):
 
     available_rooms = []
     for row in ws_rooms.iter_rows(min_row=2, values_only=True):
-        room_id, name, acc, pwd, link, usage, closed = row[:7]
-        if room_id not in booked_rooms and not str(closed).strip().upper() == "TRUE":
-            available_rooms.append({
-                "ID": room_id,
-                "名稱": name,
-                "帳號": acc,
-                "密碼": pwd,
-                "連結": link,
-                "用途": usage
-            })
-
+        room_id, name, acc, pwd, link, usage, closed = row
+        if room_id not in booked_rooms and str(closed).strip().upper() != "TRUE":
+            available_rooms.append((room_id, name, usage))
     return available_rooms
 
-# 自動產生流水號
-def get_next_id(ws):
-    max_id = 0
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        if row[0] and isinstance(row[0], int):
-            max_id = max(max_id, row[0])
-    return max_id + 1
-
-# 新增預約紀錄
-def add_booking(date, slot_ids, meeting_id, user_id, purpose, filename=FILENAME):
-    wb = load_workbook(filename)
+# 寫入預約
+def add_booking():
+    wb = load_workbook(FILENAME)
     ws = wb["Schedule"]
-    new_id = get_next_id(ws)
-    slot_str = ",".join(map(str, slot_ids))
-    new_record = [new_id, date, slot_str, meeting_id, user_id, purpose, False]
-    ws.append(new_record)
-    wb.save(filename)
-    print(f"已新增預約紀錄（流水號 {new_id}）")
+    new_id = 1
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if isinstance(row[0], int):
+            new_id = max(new_id, row[0] + 1)
+    slot_str = ",".join(map(str, app_state["selected_slots"]))
+    ws.append([new_id, app_state["selected_date"], slot_str, app_state["selected_room"],
+               app_state["user_id"], app_state["purpose"], False])
+    wb.save(FILENAME)
 
-# 主流程
-def run_cli():
-    init_excel_file()
-    date = input("請輸入預約日期（格式 YYYY-MM-DD）：").strip()
-    check_availability(date)
+# 主應用程式
+class MeetingApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("會議室預約系統")
+        self.geometry("550x450")
+        self.frames = {}
 
-    while True:
-        slot_ids = input_slot_ids()
-        available_rooms = get_available_meeting_rooms(date, slot_ids)
-        if not available_rooms:
-            print("此時段無可用會議室，請更換時段。")
-            continue
-        break
+        for F in (PageDateInput, PageTimeSelect, PageRoomSelect, PageConfirm, PageFinish):
+            page_name = F.__name__
+            frame = F(parent=self, controller=self)
+            self.frames[page_name] = frame
+            frame.grid(row=0, column=0, sticky="nsew")
 
-    print("\n可用會議室列表：")
-    for idx, room in enumerate(available_rooms, start=1):
-        print(f"{idx}) {room['名稱']}（用途：{room['用途']}）")
+        self.show_frame("PageDateInput")
 
-    while True:
+    def show_frame(self, page_name):
+        frame = self.frames[page_name]
+        frame.tkraise()
+        if hasattr(frame, "refresh"):
+            frame.refresh()
+
+# 頁面一：輸入日期
+class PageDateInput(tk.Frame):
+    def __init__(self, parent, controller):
+        super().__init__(parent)
+        self.controller = controller
+        tk.Label(self, text="輸入預約日期（YYYY-MM-DD）", font=("Arial", 14)).pack(pady=20)
+        self.date_entry = tk.Entry(self)
+        self.date_entry.pack()
+        tk.Button(self, text="查詢可預約時段", command=self.next_page).pack(pady=20)
+
+    def next_page(self):
+        date = self.date_entry.get().strip()
         try:
-            choice = int(input("請選擇會議室（輸入數字）：").strip())
-            if 1 <= choice <= len(available_rooms):
-                meeting_id = available_rooms[choice - 1]["ID"]
-                break
-            else:
-                print("選項超出範圍，請重新輸入。")
+            datetime.strptime(date, "%Y-%m-%d")
+            app_state["selected_date"] = date
+            self.controller.show_frame("PageTimeSelect")
         except ValueError:
-            print("請輸入正確的數字編號。")
+            messagebox.showerror("錯誤", "請輸入正確的日期格式 YYYY-MM-DD")
 
-    user_id = input("請輸入預約人 ID（如 U001）：").strip().upper()
-    purpose = input("請輸入使用目的（如：專案會議）：").strip()
-    if not all([meeting_id, user_id, purpose]):
-        print("所有欄位皆為必填，請重新執行。")
-        return
+# 頁面二：選擇可預約時段
+class PageTimeSelect(tk.Frame):
+    def __init__(self, parent, controller):
+        super().__init__(parent)
+        self.controller = controller
+        self.labels = []
+        self.vars = {}
+        self.time_slots = load_time_slots()
+        tk.Label(self, text="選擇可預約時段", font=("Arial", 14)).pack(pady=10)
+        self.slot_frame = tk.Frame(self)
+        self.slot_frame.pack()
+        tk.Button(self, text="下一步", command=self.next_page).pack(pady=10)
 
-    add_booking(date, slot_ids, meeting_id, user_id, purpose)
-    check_availability(date)
+    def refresh(self):
+        for widget in self.slot_frame.winfo_children():
+            widget.destroy()
+        self.vars = {}
 
-# 執行主流程
+        date = app_state["selected_date"]
+        wb = load_workbook(FILENAME)
+        ws = wb["Schedule"]
+        used = {i: False for i in self.time_slots}
+
+        # 判斷當天哪些時段已被預約
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if row[1] == date and not row[6]:
+                for sid in map(int, row[2].split(',')):
+                    used[sid] = True
+
+        # 篩選尚未被預約的時段
+        available_slots = [(sid, time_str) for sid, time_str in self.time_slots.items() if not used[sid]]
+
+        # 如果沒有可預約時段，跳出訊息並返回首頁
+        if not available_slots:
+            messagebox.showinfo("預約已滿", f"{date} 所有時段都已被預約，請選擇其他日期")
+            self.controller.show_frame("PageDateInput")
+            return
+
+        # 顯示可預約時段的 Checkbutton
+        for sid, time_str in available_slots:
+            var = tk.IntVar()
+            cb = tk.Checkbutton(self.slot_frame, text=f"{sid}: {time_str}", variable=var)
+            cb.pack(anchor="w")
+            self.vars[sid] = var
+
+
+    def next_page(self):
+        app_state["selected_slots"] = [sid for sid, var in self.vars.items() if var.get()]
+        if not app_state["selected_slots"]:
+            messagebox.showwarning("提醒", "請至少選擇一個時段")
+            return
+        self.controller.show_frame("PageRoomSelect")
+
+# 頁面三：選擇會議室
+class PageRoomSelect(tk.Frame):
+    def __init__(self, parent, controller):
+        super().__init__(parent)
+        self.controller = controller
+        tk.Label(self, text="選擇會議室", font=("Arial", 14)).pack(pady=10)
+        self.room_var = tk.StringVar()
+        self.room_frame = tk.Frame(self)
+        self.room_frame.pack()
+        tk.Button(self, text="下一步", command=self.next_page).pack(pady=10)
+
+    def refresh(self):
+        for widget in self.room_frame.winfo_children():
+            widget.destroy()
+        date = app_state["selected_date"]
+        slots = app_state["selected_slots"]
+        rooms = get_available_rooms(date, slots)
+        if not rooms:
+            tk.Label(self.room_frame, text="無可用會議室，請返回上一步").pack()
+            return
+        for room_id, name, usage in rooms:
+            rb = tk.Radiobutton(self.room_frame, text=f"{room_id} - {name}（{usage}）", variable=self.room_var, value=room_id)
+            rb.pack(anchor="w")
+
+    def next_page(self):
+        room = self.room_var.get()
+        if not room:
+            messagebox.showwarning("提醒", "請選擇一間會議室")
+            return
+        app_state["selected_room"] = room
+        self.controller.show_frame("PageConfirm")
+
+# 頁面四：輸入預約人資料
+class PageConfirm(tk.Frame):
+    def __init__(self, parent, controller):
+        super().__init__(parent)
+        self.controller = controller
+        tk.Label(self, text="輸入預約資訊", font=("Arial", 14)).pack(pady=10)
+        tk.Label(self, text="預約人ID：").pack()
+        self.entry_user = tk.Entry(self)
+        self.entry_user.pack()
+        tk.Label(self, text="使用目的：").pack()
+        self.entry_purpose = tk.Entry(self)
+        self.entry_purpose.pack()
+        tk.Button(self, text="完成預約", command=self.finish).pack(pady=10)
+
+    def finish(self):
+        uid = self.entry_user.get().strip()
+        purpose = self.entry_purpose.get().strip()
+        if not uid or not purpose:
+            messagebox.showerror("錯誤", "請填寫所有欄位")
+            return
+        app_state["user_id"] = uid
+        app_state["purpose"] = purpose
+        add_booking()
+        self.controller.show_frame("PageFinish")
+
+# 頁面五：完成畫面
+class PageFinish(tk.Frame):
+    def __init__(self, parent, controller):
+        super().__init__(parent)
+        tk.Label(self, text="預約完成", font=("Arial", 16)).pack(pady=30)
+        tk.Button(self, text="返回首頁", command=lambda: controller.show_frame("PageDateInput")).pack(pady=10)
+
+# 執行主程式
 if __name__ == "__main__":
-    run_cli()
+    init_excel_file()
+    app = MeetingApp()
+    app.mainloop()
