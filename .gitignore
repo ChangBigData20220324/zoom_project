@@ -17,3 +17,10 @@ __pycache__/
 
 # 測試檔案
 *.xlsx
+
+# build 產物（PyInstaller / 打包）
+/build/        
+/dist/        
+/*.spec        
+/zoom.ico      
+>>>>>>> 05d7ac6 (移除ignore的中文備註)
