@@ -22,5 +22,4 @@ __pycache__/
 /build/        
 /dist/        
 /*.spec        
-/zoom.ico      
->>>>>>> 05d7ac6 (移除ignore的中文備註)
+/zoom.ico >>>>>>> main
